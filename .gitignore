@@ -6,6 +6,8 @@ RESEARCH.md
 
 # 运行状态
 state.json
+launchd.log
+launchd.err.log
 
 # 抓包/调试残留
 landing.html

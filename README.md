@@ -80,6 +80,27 @@ ntfy topic 放在 `secrets.json`（已 gitignore，不进仓库）：
 
 红线：脚本**绝不自动答验证题、绝不自动 Save / 下单**。Event name 会自动填 "Tennis"。
 
+## 6. 当前部署：Mac 常驻（launchd，每 2 分钟）
+
+GitHub 免费定时器太稀（实测一天就触发几次），所以改成挂在 Mac 上跑、每 2 分钟一查。
+GitHub Actions 那套已 `disabled`（备用，想用回去：`gh workflow enable monitor.yml`）。
+
+配置文件：`~/Library/LaunchAgents/com.siyuwan.tennis-monitor.plist`
+（每 120 秒跑一次 `monitor.py --once`，脚本内部只在太平洋时间 8–21 点真正工作）
+
+常用命令：
+```bash
+# 启动 / 停止
+launchctl load -w  ~/Library/LaunchAgents/com.siyuwan.tennis-monitor.plist
+launchctl unload   ~/Library/LaunchAgents/com.siyuwan.tennis-monitor.plist
+# 看状态（PID + 上次退出码，0=正常）
+launchctl list | grep tennis
+# 看日志
+tail -f ~/tennis-booker/launchd.log
+```
+
+> 注意：Mac 睡眠 / 关机 时不查（醒来后补跑一次）。长时间不在可临时 `gh workflow enable monitor.yml` 让云端兜底。
+
 ## 已知边界
 
 - 订场窗口 = 7 天；可用接口对超过 7 天的日期不拦（会显示全空），所以只盯到 +7。
