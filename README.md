@@ -62,6 +62,24 @@ ntfy topic 放在 `secrets.json`（已 gitignore，不进仓库）：
 推送通知里有个 **"搞定这天，别再提醒"** 按钮，点一下会让监控静音那一天（通过控制 topic 传指令）。
 也可以本地 `python monitor.py --snooze YYYY-MM-DD`。静音记录过了那天会自动清除。
 
+## 5. Mac 预填助手（prefill.user.js）
+
+收到提醒、在 Mac 上订场时，这个 userscript 自动把表单填好，**只留人工验证题给你本人答**。
+
+安装（一次）：
+1. Chrome 装 **Tampermonkey** 扩展
+2. Tampermonkey → 新建脚本 → 粘贴 `prefill.user.js` 全部内容 → 保存
+   （或把 `prefill.user.js` 拖进 Chrome，会提示安装）
+
+用法：
+1. 打开订场页，登入，选好日期
+2. **点你要的空场格子**（这步是真实点击，脚本不替你点——网格只认真实事件）
+3. 点 **Confirm bookings** → 弹出 Custom questions 时，脚本自动：
+   勾 Singles + I agree + 90 分钟下拉选 "I agree"，并把光标停在验证题框
+4. 你只需**答验证题**（如 first letter of "Friday" → F）→ 点 **Save**
+
+红线：脚本**绝不自动答验证题、绝不自动 Save / 下单**。Event name 会自动填 "Tennis"。
+
 ## 已知边界
 
 - 订场窗口 = 7 天；可用接口对超过 7 天的日期不拦（会显示全空），所以只盯到 +7。
