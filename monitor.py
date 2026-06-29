@@ -179,7 +179,8 @@ def find_openings(cfg, avail, d):
         if flt and res["resource_id"] not in flt:
             continue
         tsd = res.get("time_slot_details", [])
-        if idx < len(tsd) and tsd[idx].get("status") == 1:
+        # status: 0 = 可订(白格), 1 = 不可订(灰格/已订/超窗)。已逐格与 DOM 比对确认。
+        if idx < len(tsd) and tsd[idx].get("status") == 0:
             out.append((res["resource_id"], res["resource_name"]))
     return want, out
 
