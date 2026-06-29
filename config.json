@@ -1,0 +1,16 @@
+{
+  "ntfy_server": "https://ntfy.sh",
+
+  "facility_group_id": 1,
+  "weekday_slot": "20:00:00",
+  "weekend_slot": "18:30:00",
+
+  "days_ahead": 7,
+  "include_today": false,
+
+  "poll_seconds": 120,
+  "active_start_hour_pt": 8,
+  "active_end_hour_pt": 21,
+
+  "courts_filter": []
+}

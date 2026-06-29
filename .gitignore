@@ -1,0 +1,18 @@
+# 私密：ntfy topic（相当于密码）
+secrets.json
+
+# 内部研究笔记（含 customer_id 等），不进公开仓库
+RESEARCH.md
+
+# 运行状态
+state.json
+
+# 抓包/调试残留
+landing.html
+avail*.json
+cookies.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/

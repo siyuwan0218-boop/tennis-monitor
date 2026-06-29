@@ -1,0 +1,51 @@
+name: tennis-monitor
+
+# 每 5 分钟跑一轮（cron 是 UTC）。脚本内部按太平洋时间 8:00–21:00 自动只在时段内工作，
+# 时段外会立即退出（公开仓库 Actions 分钟数无限，空跑无所谓）。
+# 注意：GitHub 定时任务在高峰期可能延迟几分钟，属正常。
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: tennis-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      # 跨运行保留去重状态（避免每 5 分钟重复推同一个空场）
+      - name: Restore dedup state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: tennis-state-${{ github.run_id }}
+          restore-keys: |
+            tennis-state-
+
+      - name: Run monitor (one pass)
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_CONTROL_TOPIC: ${{ secrets.NTFY_CONTROL_TOPIC }}
+        run: python monitor.py --once
+
+      - name: Save dedup state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: tennis-state-${{ github.run_id }}
