@@ -346,7 +346,8 @@ def main():
     if args.test:
         ntfy_publish(cfg, "🎾 测试推送", "如果你在手机上看到这条，说明 ntfy 通了。",
                      click=LANDING, tags=["tennis"], priority="high")
-        print(f"已发测试推送到 topic: {cfg['ntfy_topic']}")
+        topic = cfg.get("ntfy_topic", "")
+        print(f"已发测试推送（topic {topic[:10]}…，已隐去）")
         return
 
     client = Client(cfg)
