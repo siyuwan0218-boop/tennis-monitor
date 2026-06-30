@@ -80,10 +80,11 @@ ntfy topic 放在 `secrets.json`（已 gitignore，不进仓库）：
 
 红线：脚本**绝不自动答验证题、绝不自动 Save / 下单**。Event name 会自动填 "Tennis"。
 
-## 6. 当前部署：Mac 常驻（launchd，每 2 分钟）
+## 6. 备选部署：Mac 常驻（launchd，每 2 分钟）
 
-GitHub 免费定时器太稀（实测一天就触发几次），所以改成挂在 Mac 上跑、每 2 分钟一查。
-GitHub Actions 那套已 `disabled`（备用，想用回去：`gh workflow enable monitor.yml`）。
+> **当前用的是 GitHub Actions（约每小时，见第 3 节）。** 因为电脑不会一直开着，所以用云端。
+> 下面这套 Mac 常驻是备选——想要更勤的轮询、且电脑会开着时再用：
+> 先 `gh workflow disable monitor.yml`，再 `launchctl load -w ...`（plist 仍在 LaunchAgents）。
 
 配置文件：`~/Library/LaunchAgents/com.siyuwan.tennis-monitor.plist`
 （每 120 秒跑一次 `monitor.py --once`，脚本内部只在太平洋时间 8–21 点真正工作）
