@@ -90,7 +90,7 @@ def save_state(cfg, st):
 
 def prune_state(st, today_iso):
     """删掉已过去日期的记录。"""
-    for key in ("dates", "snoozed"):
+    for key in ("dates", "snoozed", "counts"):
         for d in list(st.get(key, {}).keys()):
             if d < today_iso:
                 st[key].pop(d, None)
@@ -271,7 +271,41 @@ def poll_control(cfg, st):
     st["control_since"] = newest + 1
 
 
+# ----------------------------- 心跳 / 报错告警 -----------------------------
+
+def maybe_heartbeat(cfg, st, now):
+    """每天 19 点后发一条低优先级心跳，让用户知道监控活着、今天查了几轮。"""
+    today_iso = now.date().isoformat()
+    if now.hour < 19 or st.get("heartbeat_date") == today_iso:
+        return
+    n = st.get("counts", {}).get(today_iso, 0)
+    try:
+        ntfy_publish(cfg, "✅ 监控正常",
+                     f"今天已检查 {n} 轮。空场一出现会立刻高优先级提醒你。",
+                     priority="low", tags=["hourglass_done"])
+        st["heartbeat_date"] = today_iso
+        log(f"已发心跳（今天第 {n} 轮）")
+    except Exception as e:
+        log(f"心跳发送失败（忽略）：{e}")
+
+
+def maybe_error_alert(cfg, st, today_iso):
+    """连续 ≥5 次查询失败时告警（每天最多一条），网站改接口/拦截能及时知道。"""
+    if st.get("consec_errors", 0) < 5 or st.get("error_alert_date") == today_iso:
+        return
+    try:
+        ntfy_publish(cfg, "⚠️ 监控在报错",
+                     "连续 5 次查询失败，网站可能改了接口或在拦截，需要人工看一眼。",
+                     priority="high", tags=["warning"])
+        st["error_alert_date"] = today_iso
+    except Exception as e:
+        log(f"错误告警发送失败：{e}")
+
+
 # ----------------------------- 一轮检查 -----------------------------
+
+REALERT_COOLDOWN = 45 * 60  # 同一天出现"新场地"时的重推冷却
+
 
 def run_once(cfg, client, st, notify=True):
     now = datetime.now(PT)
@@ -279,24 +313,34 @@ def run_once(cfg, client, st, notify=True):
     prune_state(st, today_iso)
     poll_control(cfg, st)
 
+    counts = st.setdefault("counts", {})
+    counts[today_iso] = counts.get(today_iso, 0) + 1
+
     for d in target_dates(cfg, now.date()):
         diso = d.isoformat()
         if st["snoozed"].get(diso):
             continue
         try:
             avail = client.availability(diso)
+            st["consec_errors"] = 0
         except Exception as e:
             log(f"{diso} 查可用出错：{e}")
+            st["consec_errors"] = st.get("consec_errors", 0) + 1
+            maybe_error_alert(cfg, st, today_iso)
             continue
         want, open_courts = find_openings(cfg, avail, d)
         wd = WEEKDAYS[d.weekday()]
-        rec = st["dates"].setdefault(diso, {"alerted": False})
+        rec = st["dates"].setdefault(diso, {"alerted": False, "courts": [], "last_alert": 0})
 
         if open_courts:
+            ids = sorted(cid for cid, _ in open_courts)
             names = ", ".join(n.split(" - ")[-1].replace(" Tennis Court", "")
                               for _, n in open_courts)
             log(f"{diso} {wd} {hhmm(want)} -> 可订 {len(open_courts)} 片：{names}")
-            if notify and not rec["alerted"]:
+            # 推送条件：这波空场还没提醒过；或开出了新场地且距上次提醒超过冷却时间
+            new_courts = [c for c in ids if c not in rec.get("courts", [])]
+            cooled = time.time() - rec.get("last_alert", 0) > REALERT_COOLDOWN
+            if notify and (not rec["alerted"] or (new_courts and cooled)):
                 title = f"🎾 有空场 {wd} {d.strftime('%-m/%-d')} {hhmm(want)}"
                 body = (f"{len(open_courts)} 片可订：{names}\n"
                         f"点开去订（自己答验证题 + 确认）")
@@ -305,18 +349,67 @@ def run_once(cfg, client, st, notify=True):
                 if sa:
                     actions.append(sa)
                 ntfy_publish(cfg, title, body, click=LANDING, tags=["tennis"],
-                             actions=actions, priority="high")
+                             actions=actions, priority="max")
                 rec["alerted"] = True
+                rec["last_alert"] = time.time()
                 log(f"  → 已推送 ntfy")
+            rec["courts"] = ids
         else:
             log(f"{diso} {wd} {hhmm(want)} -> 无空场")
             rec["alerted"] = False  # 归零：下次再出现空场会重新提醒
+            rec["courts"] = []
 
+    maybe_heartbeat(cfg, st, now)
     save_state(cfg, st)
 
 
 def within_active_hours(cfg, now):
     return cfg["active_start_hour_pt"] <= now.hour < cfg["active_end_hour_pt"]
+
+
+# ----------------------------- CI 长跑模式 -----------------------------
+
+RELEASE_START = 7 * 60 + 58   # 07:58 PT，提前候场
+RELEASE_END = 8 * 60 + 20     # 08:20 PT，冲刺结束
+RELEASE_INTERVAL = 20         # 冲刺期间每 20 秒查一轮
+
+
+def ci_loop(cfg, client, st, max_seconds):
+    """GitHub Actions 长跑：一次触发内部持续轮询，把稀疏的免费调度摊成全天覆盖。
+    - 07:58–08:20 PT 放场冲刺：每 20 秒一轮（第 7 天的新场就是早 8 点放出来的）
+    - 其余 8:00–21:00：每 poll_seconds 一轮
+    - 过 21:00 收工；距开窗太远则直接退出把机会留给下一班
+    """
+    start = time.time()
+    end_min = cfg["active_end_hour_pt"] * 60
+    log(f"CI 长跑启动（上限 {max_seconds // 60} 分钟）")
+    while True:
+        remaining = max_seconds - (time.time() - start)
+        if remaining <= 0:
+            log("到达本班时长上限，收工（下一班接力）")
+            break
+        now = datetime.now(PT)
+        mins = now.hour * 60 + now.minute
+        if mins >= end_min:
+            log(f"已过 {cfg['active_end_hour_pt']}:00 PT，今天收工")
+            break
+        if mins < RELEASE_START:
+            secs_to_window = (RELEASE_START - mins) * 60
+            if secs_to_window > remaining:
+                log("距开窗太远，本班退出，等下一班")
+                break
+            nap = min(600, secs_to_window)
+            log(f"未到监控时段，睡 {nap // 60} 分钟候场")
+            time.sleep(nap)
+            continue
+        try:
+            run_once(cfg, client, st, notify=True)
+        except Exception as e:
+            log(f"本轮异常：{e}")
+        in_release = RELEASE_START <= mins < RELEASE_END
+        interval = RELEASE_INTERVAL if in_release else cfg.get("poll_seconds", 150)
+        time.sleep(max(1, min(interval, max_seconds - (time.time() - start))))
+    save_state(cfg, st)
 
 
 # ----------------------------- 入口 -----------------------------
@@ -329,6 +422,8 @@ def main():
     g.add_argument("--test", action="store_true", help="发一条测试推送")
     g.add_argument("--once", action="store_true", help="跑一轮（cron 用）")
     g.add_argument("--loop", action="store_true", help="常驻轮询")
+    g.add_argument("--ci-loop", type=int, metavar="SECONDS",
+                   help="CI 长跑模式：单次进程内持续轮询，最多 SECONDS 秒")
     g.add_argument("--snooze", metavar="YYYY-MM-DD", help="手动静音某天")
     g.add_argument("--status", action="store_true", help="打印状态")
     args = ap.parse_args()
@@ -355,6 +450,9 @@ def main():
 
     if args.check:
         run_once(cfg, client, st, notify=False)
+        return
+    if args.ci_loop:
+        ci_loop(cfg, client, st, args.ci_loop)
         return
     if args.once:
         now = datetime.now(PT)

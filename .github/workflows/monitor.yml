@@ -1,11 +1,14 @@
 name: tennis-monitor
 
-# 每半小时跑一轮(:07 和 :37, cron 是 UTC)，设两次是为了对冲 GitHub 偶尔跳过，
-# 实际约每小时有效一次。脚本内部按太平洋时间 8:00–21:00 只在时段内工作，时段外立即退出。
-# 注意：GitHub 免费定时器可能延迟/跳过，属正常；要更准时就挂 Mac/VPS。
+# 长跑模式：GitHub 免费调度实测一天只肯触发 3~5 次（跟设多少无关），
+# 所以改成每次触发后在 job 内部持续轮询最多 5.5 小时（公开仓库分钟数免费），
+# 靠 concurrency 队列前后接力，把全天 8:00–21:00 PT 基本盖满。
+# 额外在 UTC 14:45 / 15:45 各请求一班，保证早 8 点 PT 放场冲刺时段有人在岗（对冲夏/冬令时）。
 on:
   schedule:
-    - cron: "7,37 * * * *"
+    - cron: "17 */2 * * *"
+    - cron: "45 14 * * *"
+    - cron: "45 15 * * *"
   workflow_dispatch:
     inputs:
       send_test:
@@ -23,7 +26,7 @@ permissions:
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +53,7 @@ jobs:
           if [ "${{ inputs.send_test }}" = "true" ]; then
             python monitor.py --test
           else
-            python monitor.py --once
+            python monitor.py --ci-loop 19800
           fi
 
       - name: Save dedup state
