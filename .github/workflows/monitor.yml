@@ -20,8 +20,9 @@ concurrency:
   group: tennis-monitor
   cancel-in-progress: false
 
+# contents: write 是给 keepalive 空提交用的（防 60 天不活跃被 GitHub 自动停用调度）
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   poll:
@@ -35,6 +36,21 @@ jobs:
           python-version: "3.11"
 
       - run: pip install -r requirements.txt
+
+      # GitHub 会在仓库 60 天无提交后自动停用 schedule（2026-09-17 就这么死过一次）。
+      # 距上次提交 ≥40 天就推一个空提交重置计时器，一劳永逸。
+      - name: Keepalive
+        run: |
+          last=$(git log -1 --format=%ct)
+          days=$(( ( $(date +%s) - last ) / 86400 ))
+          echo "距上次提交 ${days} 天"
+          if [ "$days" -ge 40 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive: reset 60-day inactivity timer [skip ci]"
+            git push
+            echo "已推 keepalive 空提交"
+          fi
 
       # 跨运行保留去重状态（避免每 5 分钟重复推同一个空场）
       - name: Restore dedup state
