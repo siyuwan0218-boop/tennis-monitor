@@ -66,6 +66,8 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_CONTROL_TOPIC: ${{ secrets.NTFY_CONTROL_TOPIC }}
           NTFY_ALERT_EMAIL: ${{ secrets.NTFY_ALERT_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          BARK_KEY: ${{ secrets.BARK_KEY }}
         run: |
           if [ "${{ inputs.send_test }}" = "true" ]; then
             python monitor.py --test

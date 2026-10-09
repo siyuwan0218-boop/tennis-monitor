@@ -63,7 +63,9 @@ def load_config(path):
     for env_key, cfg_key in (("NTFY_TOPIC", "ntfy_topic"),
                              ("NTFY_CONTROL_TOPIC", "control_topic"),
                              ("NTFY_SERVER", "ntfy_server"),
-                             ("NTFY_ALERT_EMAIL", "alert_email")):
+                             ("NTFY_ALERT_EMAIL", "alert_email"),
+                             ("GMAIL_APP_PASSWORD", "gmail_app_password"),
+                             ("BARK_KEY", "bark_key")):
         if os.environ.get(env_key):
             cfg[cfg_key] = os.environ[env_key]
     return cfg
@@ -204,8 +206,7 @@ def hhmm(t):  # "20:00:00" -> "8:00 PM"
 _PRIO = {"min": 1, "low": 2, "default": 3, "high": 4, "max": 5, "urgent": 5}
 
 
-def ntfy_publish(cfg, title, message, click=None, tags=None, actions=None, priority=None,
-                 email=None):
+def ntfy_publish(cfg, title, message, click=None, tags=None, actions=None, priority=None):
     topic = cfg.get("ntfy_topic")
     if not topic:
         raise RuntimeError("没配置 ntfy_topic（放 secrets.json，或设环境变量 NTFY_TOPIC）")
@@ -218,11 +219,53 @@ def ntfy_publish(cfg, title, message, click=None, tags=None, actions=None, prior
         payload["actions"] = actions
     if priority:
         payload["priority"] = _PRIO.get(priority, priority) if isinstance(priority, str) else priority
-    if email:
-        payload["email"] = email  # ntfy.sh 原生邮件转发；只给空场/故障用，心跳不带
     r = requests.post(cfg.get("ntfy_server", "https://ntfy.sh"), json=payload, timeout=15)
     if not r.ok:
         raise RuntimeError(f"ntfy {r.status_code}: {r.text[:200]}")
+
+
+# ---------- 兜底通道（Bark / Gmail SMTP），各自独立，不影响 ntfy 主推送 ----------
+
+def send_bark(cfg, title, body, click=None):
+    """Bark：iOS 原生 APNs 推送，比 ntfy 在 iPhone 上可靠。配 bark_key 即启用。"""
+    key = cfg.get("bark_key")
+    if not key:
+        return False
+    payload = {"title": title, "body": body, "level": "timeSensitive", "group": "tennis"}
+    if click:
+        payload["url"] = click
+    r = requests.post(f"https://api.day.app/{key}", json=payload, timeout=15)
+    r.raise_for_status()
+    return True
+
+
+def send_email(cfg, subject, body):
+    """Gmail SMTP：需 alert_email + gmail_app_password（应用专用密码）才启用。"""
+    addr, pw = cfg.get("alert_email"), cfg.get("gmail_app_password")
+    if not (addr and pw):
+        return False
+    import smtplib
+    from email.mime.text import MIMEText
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"], msg["From"], msg["To"] = subject, addr, addr
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as s:
+        s.login(addr, pw)
+        s.sendmail(addr, [addr], msg.as_string())
+    return True
+
+
+def alert_fanout(cfg, title, body, click=None):
+    """空场/故障级消息的多通道兜底。每条通道独立 try，谁挂都不连累别人。"""
+    try:
+        if send_bark(cfg, title, body, click):
+            log("  → 兜底通道 Bark 已发")
+    except Exception as e:
+        log(f"Bark 发送失败（忽略）：{e}")
+    try:
+        if send_email(cfg, title, body + (f"\n\n{click}" if click else "")):
+            log("  → 兜底通道 邮件 已发")
+    except Exception as e:
+        log(f"邮件发送失败（忽略）：{e}")
 
 
 def snooze_action(cfg, date_iso):
@@ -298,9 +341,9 @@ def maybe_error_alert(cfg, st, today_iso):
     if st.get("consec_errors", 0) < 5 or st.get("error_alert_date") == today_iso:
         return
     try:
-        ntfy_publish(cfg, "⚠️ 监控在报错",
-                     "连续 5 次查询失败，网站可能改了接口或在拦截，需要人工看一眼。",
-                     priority="high", tags=["warning"], email=cfg.get("alert_email"))
+        msg = "连续 5 次查询失败，网站可能改了接口或在拦截，需要人工看一眼。"
+        ntfy_publish(cfg, "⚠️ 监控在报错", msg, priority="high", tags=["warning"])
+        alert_fanout(cfg, "⚠️ 监控在报错", msg)
         st["error_alert_date"] = today_iso
     except Exception as e:
         log(f"错误告警发送失败：{e}")
@@ -352,12 +395,15 @@ def run_once(cfg, client, st, notify=True):
                 sa = snooze_action(cfg, diso)
                 if sa:
                     actions.append(sa)
-                ntfy_publish(cfg, title, body, click=LANDING, tags=["tennis"],
-                             actions=actions, priority="max",
-                             email=cfg.get("alert_email"))
+                try:
+                    ntfy_publish(cfg, title, body, click=LANDING, tags=["tennis"],
+                                 actions=actions, priority="max")
+                    log(f"  → 已推送 ntfy")
+                except Exception as e:
+                    log(f"ntfy 推送失败：{e}")
+                alert_fanout(cfg, title, body, click=LANDING)
                 rec["alerted"] = True
                 rec["last_alert"] = time.time()
-                log(f"  → 已推送 ntfy")
             rec["courts"] = ids
         else:
             log(f"{diso} {wd} {hhmm(want)} -> 无空场")
