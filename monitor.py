@@ -62,7 +62,8 @@ def load_config(path):
     # 环境变量优先（GitHub Actions 用 repo secrets 注入）
     for env_key, cfg_key in (("NTFY_TOPIC", "ntfy_topic"),
                              ("NTFY_CONTROL_TOPIC", "control_topic"),
-                             ("NTFY_SERVER", "ntfy_server")):
+                             ("NTFY_SERVER", "ntfy_server"),
+                             ("NTFY_ALERT_EMAIL", "alert_email")):
         if os.environ.get(env_key):
             cfg[cfg_key] = os.environ[env_key]
     return cfg
@@ -203,7 +204,8 @@ def hhmm(t):  # "20:00:00" -> "8:00 PM"
 _PRIO = {"min": 1, "low": 2, "default": 3, "high": 4, "max": 5, "urgent": 5}
 
 
-def ntfy_publish(cfg, title, message, click=None, tags=None, actions=None, priority=None):
+def ntfy_publish(cfg, title, message, click=None, tags=None, actions=None, priority=None,
+                 email=None):
     topic = cfg.get("ntfy_topic")
     if not topic:
         raise RuntimeError("没配置 ntfy_topic（放 secrets.json，或设环境变量 NTFY_TOPIC）")
@@ -216,6 +218,8 @@ def ntfy_publish(cfg, title, message, click=None, tags=None, actions=None, prior
         payload["actions"] = actions
     if priority:
         payload["priority"] = _PRIO.get(priority, priority) if isinstance(priority, str) else priority
+    if email:
+        payload["email"] = email  # ntfy.sh 原生邮件转发；只给空场/故障用，心跳不带
     r = requests.post(cfg.get("ntfy_server", "https://ntfy.sh"), json=payload, timeout=15)
     if not r.ok:
         raise RuntimeError(f"ntfy {r.status_code}: {r.text[:200]}")
@@ -296,7 +300,7 @@ def maybe_error_alert(cfg, st, today_iso):
     try:
         ntfy_publish(cfg, "⚠️ 监控在报错",
                      "连续 5 次查询失败，网站可能改了接口或在拦截，需要人工看一眼。",
-                     priority="high", tags=["warning"])
+                     priority="high", tags=["warning"], email=cfg.get("alert_email"))
         st["error_alert_date"] = today_iso
     except Exception as e:
         log(f"错误告警发送失败：{e}")
@@ -349,7 +353,8 @@ def run_once(cfg, client, st, notify=True):
                 if sa:
                     actions.append(sa)
                 ntfy_publish(cfg, title, body, click=LANDING, tags=["tennis"],
-                             actions=actions, priority="max")
+                             actions=actions, priority="max",
+                             email=cfg.get("alert_email"))
                 rec["alerted"] = True
                 rec["last_alert"] = time.time()
                 log(f"  → 已推送 ntfy")

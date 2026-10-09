@@ -65,6 +65,7 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_CONTROL_TOPIC: ${{ secrets.NTFY_CONTROL_TOPIC }}
+          NTFY_ALERT_EMAIL: ${{ secrets.NTFY_ALERT_EMAIL }}
         run: |
           if [ "${{ inputs.send_test }}" = "true" ]; then
             python monitor.py --test
